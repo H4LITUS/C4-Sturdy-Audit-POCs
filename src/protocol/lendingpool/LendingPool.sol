@@ -46,6 +46,7 @@ import { LendingPoolStorage } from "./LendingPoolStorage.sol";
  * @author Sturdy, inspiration from Aave
  *
  */
+
 contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage {
     using SafeMath for uint256;
     using WadRayMath for uint256;
@@ -248,7 +249,6 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
                 pos = pos.add(1);
             }
         }
-
         return (totalVolume, volumes, assets, pos);
     }
 

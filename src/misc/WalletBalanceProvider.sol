@@ -41,7 +41,7 @@ contract WalletBalanceProvider {
 
     /**
      * @dev Check the token balance of a wallet in a token contract
-     * 
+     *
      * Returns the balance of the token for user. Avoids possible errors:
      *   - return 0 on non-contract address
      *

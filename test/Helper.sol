@@ -9,6 +9,7 @@ import { LidoVault } from "../src/protocol/vault/ethereum/LidoVault.sol";
 import { ConvexCurveLPVault } from
     "../src/protocol/vault/ethereum/ConvexVault/ConvexCurveLPVault.sol";
 
+import { AToken } from "../src/protocol/tokenization/AToken.sol";
 import { ATokenForCollateral } from "../src/protocol/tokenization/ATokenForCollateral.sol";
 import { StableDebtToken } from "../src/protocol/tokenization/StableDebtToken.sol";
 import { VariableDebtToken } from "../src/protocol/tokenization/VariableDebtToken.sol";
@@ -118,12 +119,15 @@ contract Helper {
     address constant UNISWAP_ROUTER_ADDRESS = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address constant DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    address constant CURVE_POOL_DAI_USDC_USDT = 0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7;
 
     IConvexBooster internal convexBooster =
         IConvexBooster(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
 
     address internal stETHaTokenProxyAddress;
     address internal lpTokenATokenProxyAddress;
+    address internal usdcATokenProxyAddress;
+    address internal daiATokenProxyAddress;
 
     LendingPoolAddressesProvider internal lendingPoolAddressesProvider;
     address internal lendingPoolProxyAddress;
@@ -131,13 +135,25 @@ contract Helper {
     LidoVault internal lidoVault;
     ConvexCurveLPVault internal convexVault;
 
+    // mock tokens for stEth
     ATokenForCollateral internal stETHaToken;
     StableDebtToken internal stETHstableDebtToken;
     VariableDebtToken internal stETHvariableDebtToken;
 
+    // mock tokens for lpToken
     ATokenForCollateral internal lpTokenAToken;
     StableDebtToken internal lpTokenStableDebtToken;
     VariableDebtToken internal lpTokenVariableDebtToken;
+
+    // mock tokens for USDC
+    AToken internal usdcAToken;
+    StableDebtToken internal usdcStableDebtToken;
+    VariableDebtToken internal usdcVariableDebtToken;
+
+    // mock tokens for DAI
+    AToken internal daiAToken;
+    StableDebtToken internal daiStableDebtToken;
+    VariableDebtToken internal daiVariableDebtToken;
 
     LendingPoolConfigurator internal lendingPoolConfigurator;
     ILendingPoolConfigurator.InitReserveInput[] internal input;
@@ -158,6 +174,10 @@ contract Helper {
         yieldManager.initialize(lendingPoolAddressesProvider);
         yieldManager.setExchangeToken(DAI);
 
+        // register assets with yield manager
+        yieldManager.registerAsset(WETH);
+        yieldManager.setCurvePool(DAI, USDC, CURVE_POOL_DAI_USDC_USDT);
+
         // deploy DefaultReserveInterestRateStrategy
         defaultReserveInterestRateStrategy =
         new DefaultReserveInterestRateStrategy(lendingPoolAddressesProvider, 45*10**25,0,0,0,0,0);
@@ -166,9 +186,7 @@ contract Helper {
         deployVaults();
         deployMockTokens();
 
-        /*  initialize a reserve for stEth/LpToken
-            and 
-            reserve aToken/StableDebtTokens/VariableDebtToken in Lending Pool 
+        /*  initialize reserves for stEth, lpToken, DAI and USDC
         */
         input.push(
             ILendingPoolConfigurator.InitReserveInput(
@@ -214,7 +232,51 @@ contract Helper {
             )
         );
 
-        // deploys and initializes proxy contract of all 3 tokens
+        input.push(
+            ILendingPoolConfigurator.InitReserveInput(
+                address(usdcAToken),
+                address(usdcStableDebtToken),
+                address(usdcVariableDebtToken),
+                6, // actual decimals = 6
+                address(defaultReserveInterestRateStrategy),
+                USDC,
+                address(0),
+                address(yieldManager),
+                address(0),
+                "USD Coin",
+                "usdcAToken",
+                "ATK",
+                "usdcVariableToken",
+                "VTK",
+                "usdcStableToken",
+                "STK",
+                ""
+            )
+        );
+
+        input.push(
+            ILendingPoolConfigurator.InitReserveInput(
+                address(daiAToken),
+                address(daiStableDebtToken),
+                address(daiVariableDebtToken),
+                18,
+                address(defaultReserveInterestRateStrategy),
+                DAI,
+                address(0),
+                address(yieldManager),
+                address(0),
+                "Dai Stablecoin",
+                "daiAToken",
+                "ATK",
+                "daiVariableToken",
+                "VTK",
+                "daiStableToken",
+                "STK",
+                ""
+            )
+        );
+
+        // deploys and initializes proxy contract of all tokens
         lendingPoolConfigurator.batchInitReserve(input);
 
         // get aTokenProxy address for both reserves
@@ -226,9 +288,17 @@ contract Helper {
             LendingPool(lendingPoolProxyAddress).getReserveData(convexVault.getInternalAsset());
         lpTokenATokenProxyAddress = reserves.aTokenAddress;
 
-        // enables borrowing for both tokens
+        reserves = LendingPool(lendingPoolProxyAddress).getReserveData(USDC);
+        usdcATokenProxyAddress = reserves.aTokenAddress;
+
+        reserves = LendingPool(lendingPoolProxyAddress).getReserveData(DAI);
+        daiATokenProxyAddress = reserves.aTokenAddress;
+
+        // enables borrowing for tokens
         // lendingPoolConfigurator.enableBorrowingOnReserve(stETHAddress, true);
         // lendingPoolConfigurator.enableBorrowingOnReserve(lpToken, true);
+        lendingPoolConfigurator.enableBorrowingOnReserve(USDC, true);
+        lendingPoolConfigurator.enableBorrowingOnReserve(DAI, true);
 
         // // This loop is to find the pool_id for a particulat lpToken
         // // The pool_id for the lpToken (Curve.fi aDAI/aUSDC/aUSDT) is 24
@@ -314,6 +384,7 @@ contract Helper {
         // register vaults with lending pool
         lendingPoolConfigurator.registerVault(address(lidoVault));
         lendingPoolConfigurator.registerVault(address(convexVault));
+        lendingPoolConfigurator.registerVault(address(yieldManager)); // @note
     }
 
     function deployMockTokens() internal {
@@ -326,5 +397,15 @@ contract Helper {
         lpTokenAToken = new ATokenForCollateral();
         lpTokenStableDebtToken = new StableDebtToken();
         lpTokenVariableDebtToken = new VariableDebtToken();
+
+        // deploy mock tokens for USDC
+        usdcAToken = new AToken();
+        usdcStableDebtToken = new StableDebtToken();
+        usdcVariableDebtToken = new VariableDebtToken();
+
+        // deploy mock tokens for DAI
+        daiAToken = new AToken();
+        daiStableDebtToken = new StableDebtToken();
+        daiVariableDebtToken = new VariableDebtToken();
     }
 }
